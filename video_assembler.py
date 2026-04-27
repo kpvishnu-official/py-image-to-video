@@ -1,6 +1,6 @@
 import os
 
-from moviepy import ImageClip, AudioFileClip, concatenate_videoclips
+from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 
 
 class VideoAssembler:
