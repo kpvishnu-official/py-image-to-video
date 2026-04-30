@@ -3,81 +3,58 @@ import re
 import gc
 import torch
 from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler
-from PIL import Image
 
 
 class ImageGenerator:
     """
-    Generates high-quality storybook images using Stable Diffusion 2.1.
-    Optimised for CPU-only machines with 8GB RAM.
-
-    Key optimisations used:
-      - SD 2.1 model   : much better anatomy/faces than 1.5
-      - DPMSolverMultistep scheduler : high quality in fewer steps (20-25 vs 50)
-      - float32        : required for CPU (float16 is GPU only)
-      - attention slicing : reduces peak memory usage
-      - negative prompt : actively tells SD what to avoid (bad faces, blurry, etc.)
-      -768x768        : SD 2.1 native resolution -- better than 512x512
-      - gc.collect()   : frees RAM between generations
-
-    Install:
-        pip install diffusers transformers accelerate torch pillow
+    Optimized Image Generator for low-end CPU (8GB RAM)
+    - Faster inference
+    - Better prompt quality
+    - Improved character consistency
     """
 
-    # SD 2.1 -- significantly better faces and anatomy than 1.5
-    DEFAULT_MODEL = "sd2-community/stable-diffusion-2-1"
+    # 🔥 Best lightweight + high-quality model
+    DEFAULT_MODEL = "runwayml/stable-diffusion-v1-5"
 
-    # Style suffix for consistent storybook look
-    STYLE_SUFFIX = (
-        "storybook illustration, children's book art, "
-        "detailed digital painting, warm colors, "
-        "professional illustration, high quality, "
-        "sharp focus, 8k, artstation"
+    STYLE = (
+        "anime illustration, cinematic lighting, soft shadows, "
+        "highly detailed face, expressive eyes, clean line art, "
+        "consistent character design, vibrant colors, studio quality"
     )
 
-    # Negative prompt -- tells SD exactly what to AVOID
-    # This is the biggest improvement for fixing faces/anatomy on CPU
     NEGATIVE_PROMPT = (
-        "ugly, deformed, disfigured, bad anatomy, "
-        "bad proportions, extra limbs, cloned face, "
-        "malformed hands, mutated, poorly drawn face, "
-        "poorly drawn hands, missing fingers, extra fingers, "
-        "blurry, low quality, low resolution, worst quality, "
-        "watermark, signature, text, jpeg artifacts, "
-        "out of frame, cropped, gross proportions"
+        "ugly, deformed, bad anatomy, extra limbs, extra fingers, "
+        "missing fingers, poorly drawn face, blurry, low quality, "
+        "jpeg artifacts, watermark, text, logo, 3d render, realistic photo"
     )
 
     _STOP_WORDS = {
-        "the", "a", "an", "and", "or", "but", "in", "on", "at",
-        "to", "for", "of", "with", "is", "was", "it", "he", "she",
-        "they", "that", "this", "as", "by", "from", "had", "have",
-        "his", "her", "their", "then", "so", "up", "out", "not",
-        "said", "very", "just", "been", "were", "into", "there",
+        "the","a","an","and","or","but","in","on","at","to","for","of",
+        "with","is","was","it","he","she","they","that","this","as","by",
+        "from","had","have","his","her","their","then","so","up","out",
+        "not","said","very","just","been","were","into","there","could",
+        "would","should","when","what","which","who","will","about",
+    }
+
+    _SCENE_WORDS = {
+        "forest","castle","garden","river","mountain","cave","village",
+        "house","tree","flower","field","path","bridge","lake","ocean",
+        "sky","door","room","library","market","night","morning","sunset",
+        "rain","snow","fire","light","dark","magic","golden","ancient",
+        "mysterious","enchanted","running","walking","sitting","standing",
+        "looking","holding","flying","jumping","crying","laughing",
+        "smiling","afraid","brave","happy","lost","found","searching",
     }
 
     def __init__(
         self,
         output_dir: str = "output/images",
-        model_id: str = DEFAULT_MODEL,
-        image_width: int = 768,
-        image_height: int = 768,
-        num_steps: int = 50,
-        guidance_scale: float = 8.5,
+        image_width: int = 512,
+        image_height: int = 512,
+        num_steps: int = 20,
+        guidance_scale: float = 7.5,
     ):
-        """
-        Args:
-            output_dir      : Folder to save generated .png images.
-            model_id        : Hugging Face model ID.
-            image_width     : Image width in pixels. 768 is SD 2.1 native.
-            image_height    : Image height in pixels.
-            num_steps       : Denoising steps. 20-25 is the sweet spot for
-                              DPMSolverMultistep (quality vs speed on CPU).
-            guidance_scale  : How strictly to follow the prompt.
-                              7.5-9.0 range -- higher = more prompt-faithful
-                              but less creative. 8.5 works well for storybooks.
-        """
         self.output_dir     = output_dir
-        self.model_id       = model_id
         self.image_width    = image_width
         self.image_height   = image_height
         self.num_steps      = num_steps
@@ -86,67 +63,44 @@ class ImageGenerator:
 
         os.makedirs(self.output_dir, exist_ok=True)
 
-    # ------------------------------------------------------------------ #
-    #  Public methods                                                       #
-    # ------------------------------------------------------------------ #
-
-    def load_model(self) -> None:
-        """
-        Loads SD 2.1 with CPU optimisations.
-        First run downloads ~5GB -- cached locally after that.
-        """
-        print(f"  [ImageGenerator] Loading model '{self.model_id}' ...")
-        print("  [ImageGenerator] First run downloads ~5GB -- please wait ...")
-        print("  [ImageGenerator] Subsequent runs load from cache (much faster).")
+    # 🔥 Load model (CPU optimized)
+    def load_model(self):
+        print("[ImageGenerator] Loading optimized model...")
 
         self.pipe = StableDiffusionPipeline.from_pretrained(
-            self.model_id,
-            torch_dtype=torch.float32,   # float32 required for CPU
+            self.DEFAULT_MODEL,
+            torch_dtype=torch.float32,
         )
 
-        # DPMSolverMultistep: gets high quality in 20-25 steps
-        # (vs 50 steps needed with default DDIM scheduler)
-        # This roughly halves generation time on CPU
+        # Better scheduler
         self.pipe.scheduler = DPMSolverMultistepScheduler.from_config(
             self.pipe.scheduler.config
         )
 
         self.pipe = self.pipe.to("cpu")
 
-        # Reduces peak RAM usage significantly on CPU
-        self.pipe.enable_attention_slicing(slice_size=1)
+        # 🔧 Memory optimizations
+        self.pipe.enable_attention_slicing()
 
-        print("  [ImageGenerator] Model loaded on CPU with RAM optimisations.")
-        print(f"  [ImageGenerator] Resolution: {self.image_width}x{self.image_height}, "
-              f"Steps: {self.num_steps}, CFG: {self.guidance_scale}")
+        print("[ImageGenerator] Model ready.")
 
-    def generate(self, text: str, index: int) -> str:
-        """
-        Generates a storybook-style image for a text chunk.
-
-        Args:
-            text  : Story text chunk to visualise.
-            index : Chunk number for file naming.
-
-        Returns:
-            Path to the saved .png file.
-        """
+    # 🎯 Main generate function
+    def generate(self, text: str, index: int, character_anchor: str = "") -> str:
         if self.pipe is None:
-            raise RuntimeError("Model not loaded. Call load_model() first.")
+            raise RuntimeError("Call load_model() first.")
 
         output_path = os.path.join(self.output_dir, f"image_{index:04d}.png")
 
         if os.path.exists(output_path):
-            print(f"  [ImageGenerator] Reusing existing: {output_path}")
+            print(f"[Reuse] {output_path}")
             return output_path
 
-        prompt = self._build_prompt(text)
-        print(f"  [ImageGenerator] Generating image {index} ...")
-        print(f"  [ImageGenerator] Prompt: {prompt[:100]}...")
-        print(f"  [ImageGenerator] (CPU generation takes ~5-15 mins per image)")
+        prompt = self._build_prompt(text, character_anchor)
 
-        # Set a fixed seed for reproducibility -- change to None for random
-        generator = torch.Generator().manual_seed(index * 42)
+        print(f"\n[Generating Image {index}]")
+        print(f"Prompt: {prompt[:120]}...")
+
+        generator = torch.Generator().manual_seed(42 + index)
 
         result = self.pipe(
             prompt=prompt,
@@ -158,50 +112,62 @@ class ImageGenerator:
             generator=generator,
         )
 
-        image: Image.Image = result.images[0]
-        image.save(output_path, quality=95)
-        print(f"  [ImageGenerator] Saved: {output_path}")
+        result.images[0].save(output_path, quality=95)
 
-        # Free RAM between generations -- important on 8GB CPU
+        print(f"[Saved] {output_path}")
+
         gc.collect()
-
         return output_path
 
-    # ------------------------------------------------------------------ #
-    #  Private helpers                                                      #
-    # ------------------------------------------------------------------ #
+    # 🔁 Regenerate with new seed
+    def regenerate(self, text: str, index: int, character_anchor: str = "", seed: int = 123):
+        output_path = os.path.join(self.output_dir, f"image_{index:04d}.png")
 
-    def _build_prompt(self, text: str) -> str:
-        """
-        Builds a rich, descriptive prompt from the story text.
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
-        Strategy:
-          1. Extract meaningful keywords (filter stop words)
-          2. Detect scene elements (character, setting, mood)
-          3. Prepend quality boosters and append style suffix
-        """
-        clean = re.sub(r"[^a-zA-Z\s]", " ", text.lower())
-        words = clean.split()
+        prompt = self._build_prompt(text, character_anchor)
 
-        keywords = [
-            w for w in words
-            if w not in self._STOP_WORDS and len(w) > 3
-        ]
+        generator = torch.Generator().manual_seed(seed)
 
-        # Take top 12 keywords -- too many confuses SD
-        top_keywords = keywords[:12]
-
-        if not top_keywords:
-            top_keywords = [text[:80]]
-
-        # Quality boosters prepended -- SD reads left-to-right
-        # so important words should come first
-        quality_prefix = "masterpiece, best quality, highly detailed"
-
-        prompt = (
-            quality_prefix + ", "
-            + ", ".join(top_keywords) + ", "
-            + self.STYLE_SUFFIX
+        result = self.pipe(
+            prompt=prompt,
+            negative_prompt=self.NEGATIVE_PROMPT,
+            width=self.image_width,
+            height=self.image_height,
+            num_inference_steps=self.num_steps,
+            guidance_scale=self.guidance_scale,
+            generator=generator,
         )
 
-        return prompt
+        result.images[0].save(output_path, quality=95)
+
+        gc.collect()
+        return output_path
+
+    # 🧠 Smart prompt builder
+    def _build_prompt(self, text: str, character_anchor: str) -> str:
+        clean  = re.sub(r"[^a-zA-Z\s]", " ", text.lower())
+        words  = clean.split()
+
+        scene = [w for w in words if w in self._SCENE_WORDS][:6]
+        others = [
+            w for w in words
+            if w not in self._STOP_WORDS
+            and w not in self._SCENE_WORDS
+            and len(w) > 3
+        ][:4]
+
+        keywords = ", ".join(scene + others) or text[:60]
+
+        anchor_part = f"{character_anchor}, " if character_anchor else ""
+
+        # 🔥 Key improvements here
+        return (
+            "masterpiece, best quality, ultra detailed, "
+            "same character, same face, consistent appearance, "
+            "1girl, "
+            + anchor_part
+            + keywords + ", "
+            + self.STYLE
+        )
